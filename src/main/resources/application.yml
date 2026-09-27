@@ -1,0 +1,39 @@
+server:
+  port: 8095
+  servlet:
+    context-path: /
+
+spring:
+  application:
+    name: mana-community-emergency
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/manacommunity}
+    username: ${SPRING_DATASOURCE_USERNAME:postgres}
+    password: ${SPRING_DATASOURCE_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+app:
+  jwt:
+    secret: ${JWT_SECRET:9a4f8c2e1b6d3a7e5f8b0c4d2e9f1a3b5c7d9e1f3a5b7c9d1e3f5a7b9c1d3e5f}
+    expiration-ms: 86400000
+  cors:
+    allowed-origins:
+      - "http://localhost:5173"
+      - "http://localhost:3000"
+      - "http://localhost:8080"
+      - "http://localhost:8095"
+
+emergency:
+  default-sla:
+    ack-timeout-seconds: 120        # 2 minutes to acknowledge
+    assign-timeout-seconds: 300     # 5 minutes to assign responder
+    on-scene-timeout-seconds: 600   # 10 minutes to arrive on scene
+  watchdog:
+    check-interval-ms: 30000        # Run SLA checker every 30 seconds
