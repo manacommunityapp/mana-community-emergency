@@ -82,6 +82,14 @@ public class EmergencyIncident {
     @Column(name = "location_notes", length = 500)
     private String locationNotes;
 
+    @Column(name = "trigger_source", length = 50)
+    @Builder.Default
+    private String triggerSource = "APP_ONE_TAP";
+
+    @Column(name = "sla_breached")
+    @Builder.Default
+    private Boolean slaBreached = false;
+
     // Escalation & SLA
     @Enumerated(EnumType.STRING)
     @Column(name = "current_escalation_level", length = 30)
@@ -99,6 +107,15 @@ public class EmergencyIncident {
 
     @Column(name = "assigned_at")
     private LocalDateTime assignedAt;
+
+    @Column(name = "eta_minutes")
+    private Integer etaMinutes;
+
+    @Column(name = "estimated_arrival_at")
+    private LocalDateTime estimatedArrivalAt;
+
+    @Column(name = "en_route_at")
+    private LocalDateTime enRouteAt;
 
     @Column(name = "on_scene_at")
     private LocalDateTime onSceneAt;

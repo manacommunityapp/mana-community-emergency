@@ -25,4 +25,5 @@ public class CreateIncidentRequest {
     private Double latitude;
     private Double longitude;
     private String locationNotes;
+    private String triggerSource; // e.g. APP_ONE_TAP, APP_HOLD_2S, WEARABLE, DESK_PANIC_BUTTON, INTERCOM
 }

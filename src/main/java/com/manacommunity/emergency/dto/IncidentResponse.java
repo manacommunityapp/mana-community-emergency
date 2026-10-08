@@ -31,10 +31,15 @@ public class IncidentResponse {
     private Double latitude;
     private Double longitude;
     private String locationNotes;
+    private String triggerSource;
+    private Boolean slaBreached;
     private EscalationLevel currentEscalationLevel;
     private LocalDateTime escalationDeadline;
     private LocalDateTime acknowledgedAt;
     private LocalDateTime assignedAt;
+    private Integer etaMinutes;
+    private LocalDateTime estimatedArrivalAt;
+    private LocalDateTime enRouteAt;
     private LocalDateTime onSceneAt;
     private LocalDateTime resolvedAt;
     private LocalDateTime closedAt;

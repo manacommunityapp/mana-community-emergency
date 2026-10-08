@@ -45,10 +45,11 @@ public class EmergencyCommandCenterService {
 
         long triggered = activeList.stream().filter(i -> i.getStatus() == EmergencyStatus.TRIGGERED).count();
         long acknowledged = activeList.stream().filter(i -> i.getStatus() == EmergencyStatus.ACKNOWLEDGED).count();
-        long assigned = activeList.stream().filter(i -> i.getStatus() == EmergencyStatus.RESPONDER_ASSIGNED
-                || i.getStatus() == EmergencyStatus.RESPONDER_EN_ROUTE).count();
+        long assigned = activeList.stream().filter(i -> i.getStatus() == EmergencyStatus.RESPONDER_ASSIGNED).count();
+        long enRoute = activeList.stream().filter(i -> i.getStatus() == EmergencyStatus.RESPONDER_EN_ROUTE).count();
         long onScene = activeList.stream().filter(i -> i.getStatus() == EmergencyStatus.ON_SCENE
                 || i.getStatus() == EmergencyStatus.UNDER_ACTION).count();
+        long escalated = activeList.stream().filter(i -> i.getStatus() == EmergencyStatus.ESCALATED).count();
 
         long resolvedToday = incidentRepository.countByCommunityAndStatusSince(communityId, EmergencyStatus.RESOLVED, startOfToday)
                 + incidentRepository.countByCommunityAndStatusSince(communityId, EmergencyStatus.CLOSED, startOfToday);
@@ -72,7 +73,9 @@ public class EmergencyCommandCenterService {
                 .triggeredCount(triggered)
                 .acknowledgedCount(acknowledged)
                 .responderAssignedCount(assigned)
+                .enRouteCount(enRoute)
                 .onSceneCount(onScene)
+                .escalatedCount(escalated)
                 .resolvedTodayCount(resolvedToday)
                 .totalIncidents30Days(incidentRepository.countByCommunityAndStatusSince(communityId, EmergencyStatus.CLOSED, thirtyDaysAgo))
                 .incidentsByType(incidentsByType)

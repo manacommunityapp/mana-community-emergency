@@ -13,7 +13,9 @@ public class CommandCenterDashboardResponse {
     private Long triggeredCount;
     private Long acknowledgedCount;
     private Long responderAssignedCount;
+    private Long enRouteCount;
     private Long onSceneCount;
+    private Long escalatedCount;
     private Long resolvedTodayCount;
     private Long totalIncidents30Days;
     private Map<String, Long> incidentsByType;

@@ -15,9 +15,11 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -77,6 +79,8 @@ public class IncidentManagementService {
                 .latitude(request.getLatitude())
                 .longitude(request.getLongitude())
                 .locationNotes(request.getLocationNotes())
+                .triggerSource(request.getTriggerSource() != null ? request.getTriggerSource() : "APP_ONE_TAP")
+                .slaBreached(false)
                 .currentEscalationLevel(EscalationLevel.LEVEL_1_SECURITY)
                 .escalationDeadline(deadline)
                 .build();
@@ -199,6 +203,225 @@ public class IncidentManagementService {
     }
 
     /**
+     * Automated intelligent dispatch of eligible on-duty responder.
+     */
+    @Transactional
+    public IncidentResponse autoDispatch(Long communityId, Long incidentId, Long dispatchedByUserId, String dispatcherName) {
+        EmergencyIncident incident = getIncidentOrThrow(incidentId, communityId);
+        List<EmergencyResponder> eligible = routingEngine.findEligibleResponders(communityId, incident.getEmergencyType());
+        if (eligible.isEmpty()) {
+            throw new RuntimeException("No eligible on-duty responders found for emergency type: " + incident.getEmergencyType());
+        }
+
+        // Pick responder with the least active incident load
+        EmergencyResponder chosen = eligible.stream()
+                .min(Comparator.comparingInt(EmergencyResponder::getCurrentActiveIncidents))
+                .orElse(eligible.get(0));
+
+        AssignResponderRequest req = new AssignResponderRequest();
+        req.setResponderId(chosen.getId());
+        req.setIsLead(true);
+        req.setNotes("Automated intelligent dispatch for " + incident.getEmergencyType());
+
+        return assignResponder(communityId, incidentId, dispatchedByUserId, dispatcherName, req);
+    }
+
+    /**
+     * Explicit acknowledgment of emergency by Security Dispatcher / Guard.
+     */
+    @Transactional
+    public IncidentResponse acknowledgeIncident(Long communityId, Long incidentId, Long acknowledgedByUserId,
+                                                String acknowledgedByName, String role) {
+        IncidentStatusUpdateRequest req = new IncidentStatusUpdateRequest();
+        req.setNewStatus(EmergencyStatus.ACKNOWLEDGED);
+        req.setComment("Emergency acknowledged by " + role + ": " + acknowledgedByName);
+        return updateStatus(communityId, incidentId, acknowledgedByUserId, acknowledgedByName, role, req);
+    }
+
+    /**
+     * Responder accepts dispatch and commits to an ETA (minutes).
+     * Transitions incident to RESPONDER_EN_ROUTE.
+     */
+    @Transactional
+    public IncidentResponse responderAcceptAndSetEta(Long communityId, Long incidentId, Long responderUserId,
+                                                     String responderName, int etaMinutes) {
+        EmergencyIncident incident = getIncidentOrThrow(incidentId, communityId);
+        EmergencyStatus oldStatus = incident.getStatus();
+        LocalDateTime now = LocalDateTime.now();
+
+        incident.setStatus(EmergencyStatus.RESPONDER_EN_ROUTE);
+        incident.setEnRouteAt(now);
+        incident.setEtaMinutes(etaMinutes);
+        incident.setEstimatedArrivalAt(now.plusMinutes(etaMinutes));
+        incident = incidentRepository.save(incident);
+
+        // Update corresponding assignment if exists
+        List<EmergencyAssignment> assignments = assignmentRepository.findByIncidentId(incidentId);
+        for (EmergencyAssignment a : assignments) {
+            a.setAcknowledgedAt(now);
+            a.setEnRouteAt(now);
+            a.setEtaMinutes(etaMinutes);
+            a.setEstimatedArrivalAt(now.plusMinutes(etaMinutes));
+            assignmentRepository.save(a);
+        }
+
+        logTimeline(incidentId, communityId, oldStatus, EmergencyStatus.RESPONDER_EN_ROUTE,
+                responderUserId, responderName, "RESPONDER",
+                String.format("Responder en route. ETA: %d minutes (Expected: %s)", etaMinutes, incident.getEstimatedArrivalAt().toLocalTime()));
+
+        broadcastToCommandCenter(communityId, toResponse(incident));
+        return toResponse(incident);
+    }
+
+    /**
+     * Responder marks arrival on scene.
+     * Transitions incident to ON_SCENE and clears arrival SLA countdown.
+     */
+    @Transactional
+    public IncidentResponse markOnScene(Long communityId, Long incidentId, Long responderUserId, String responderName) {
+        EmergencyIncident incident = getIncidentOrThrow(incidentId, communityId);
+        EmergencyStatus oldStatus = incident.getStatus();
+        LocalDateTime now = LocalDateTime.now();
+
+        incident.setStatus(EmergencyStatus.ON_SCENE);
+        incident.setOnSceneAt(now);
+        incident.setEscalationDeadline(null); // Clear watchdog deadline once on scene
+        incident = incidentRepository.save(incident);
+
+        List<EmergencyAssignment> assignments = assignmentRepository.findByIncidentId(incidentId);
+        for (EmergencyAssignment a : assignments) {
+            if (a.getOnSceneAt() == null) {
+                a.setOnSceneAt(now);
+                assignmentRepository.save(a);
+            }
+        }
+
+        logTimeline(incidentId, communityId, oldStatus, EmergencyStatus.ON_SCENE,
+                responderUserId, responderName, "RESPONDER", "Responder arrived on scene");
+
+        broadcastToCommandCenter(communityId, toResponse(incident));
+        return toResponse(incident);
+    }
+
+    /**
+     * Responder marks intervention under active progress.
+     */
+    @Transactional
+    public IncidentResponse markUnderAction(Long communityId, Long incidentId, Long responderUserId,
+                                            String responderName, String actionNotes) {
+        EmergencyIncident incident = getIncidentOrThrow(incidentId, communityId);
+        EmergencyStatus oldStatus = incident.getStatus();
+
+        incident.setStatus(EmergencyStatus.UNDER_ACTION);
+        incident = incidentRepository.save(incident);
+
+        logTimeline(incidentId, communityId, oldStatus, EmergencyStatus.UNDER_ACTION,
+                responderUserId, responderName, "RESPONDER",
+                actionNotes != null ? actionNotes : "Emergency intervention in progress");
+
+        broadcastToCommandCenter(communityId, toResponse(incident));
+        return toResponse(incident);
+    }
+
+    /**
+     * Mark emergency resolved on ground.
+     * Releases responder workload.
+     */
+    @Transactional
+    public IncidentResponse resolveIncident(Long communityId, Long incidentId, Long responderUserId,
+                                            String responderName, String resolutionNotes) {
+        EmergencyIncident incident = getIncidentOrThrow(incidentId, communityId);
+        EmergencyStatus oldStatus = incident.getStatus();
+        LocalDateTime now = LocalDateTime.now();
+
+        incident.setStatus(EmergencyStatus.RESOLVED);
+        incident.setResolvedAt(now);
+        incident.setEscalationDeadline(null);
+        incident = incidentRepository.save(incident);
+
+        // Free up assigned responders' active counts
+        List<EmergencyAssignment> assignments = assignmentRepository.findByIncidentId(incidentId);
+        for (EmergencyAssignment a : assignments) {
+            responderRepository.findById(a.getResponderId()).ifPresent(r -> {
+                r.setCurrentActiveIncidents(Math.max(0, r.getCurrentActiveIncidents() - 1));
+                responderRepository.save(r);
+            });
+        }
+
+        logTimeline(incidentId, communityId, oldStatus, EmergencyStatus.RESOLVED,
+                responderUserId, responderName, "RESPONDER",
+                resolutionNotes != null ? resolutionNotes : "Emergency successfully resolved");
+
+        broadcastToCommandCenter(communityId, toResponse(incident));
+        return toResponse(incident);
+    }
+
+    /**
+     * Manual escalation trigger by security dispatcher / operator.
+     */
+    @Transactional
+    public IncidentResponse escalateIncidentManually(Long communityId, Long incidentId, Long userId,
+                                                     String userName, String role,
+                                                     EscalationLevel targetLevel, String reason) {
+        EmergencyIncident incident = getIncidentOrThrow(incidentId, communityId);
+        EmergencyStatus oldStatus = incident.getStatus();
+
+        incident.setCurrentEscalationLevel(targetLevel != null ? targetLevel : EscalationLevel.LEVEL_2_SUPERVISOR);
+        incident.setStatus(EmergencyStatus.ESCALATED);
+        incident.setSlaBreached(true);
+        incident.setEscalationDeadline(LocalDateTime.now().plusMinutes(5));
+        incident = incidentRepository.save(incident);
+
+        logTimeline(incidentId, communityId, oldStatus, EmergencyStatus.ESCALATED,
+                userId, userName, role, "Manual escalation to " + incident.getCurrentEscalationLevel() + ": " + reason);
+
+        broadcastToCommandCenter(communityId, toResponse(incident));
+        return toResponse(incident);
+    }
+
+    /**
+     * Generate full immutable audit and KPI post-mortem report.
+     */
+    public IncidentAuditReportResponse generateAuditReport(Long communityId, Long incidentId) {
+        EmergencyIncident incident = getIncidentOrThrow(incidentId, communityId);
+        List<EmergencyIncidentStatusHistory> timeline = timelineRepository.findByIncidentIdOrderByCreatedAtAsc(incidentId);
+        List<EmergencyAssignment> assignments = assignmentRepository.findByIncidentId(incidentId);
+        EmergencyClosureReport closure = closureReportRepository.findByIncidentId(incidentId).orElse(null);
+
+        LocalDateTime created = incident.getCreatedAt();
+        Long timeToAck = (incident.getAcknowledgedAt() != null && created != null)
+                ? Duration.between(created, incident.getAcknowledgedAt()).getSeconds() : null;
+        Long timeToDispatch = (incident.getAssignedAt() != null && created != null)
+                ? Duration.between(created, incident.getAssignedAt()).getSeconds() : null;
+        Long timeToOnScene = (incident.getOnSceneAt() != null && created != null)
+                ? Duration.between(created, incident.getOnSceneAt()).getSeconds() : null;
+        Long totalResTime = (incident.getResolvedAt() != null && created != null)
+                ? Duration.between(created, incident.getResolvedAt()).getSeconds() : null;
+
+        boolean slaMet = !Boolean.TRUE.equals(incident.getSlaBreached());
+
+        String summary = String.format("Incident %s (%s, %s): Ack in %ss, On-Scene in %ss, Resolved in %ss. SLA Met: %s",
+                incident.getIncidentRef(), incident.getEmergencyType(), incident.getPriority(),
+                timeToAck != null ? timeToAck : "N/A",
+                timeToOnScene != null ? timeToOnScene : "N/A",
+                totalResTime != null ? totalResTime : "N/A",
+                slaMet ? "YES" : "NO");
+
+        return IncidentAuditReportResponse.builder()
+                .incident(toResponse(incident))
+                .timeline(timeline)
+                .assignments(assignments)
+                .closureReport(closure)
+                .timeToAcknowledgeSeconds(timeToAck)
+                .timeToDispatchSeconds(timeToDispatch)
+                .timeToOnSceneSeconds(timeToOnScene)
+                .totalResolutionTimeSeconds(totalResTime)
+                .slaAdherence(slaMet)
+                .auditSummary(summary)
+                .build();
+    }
+
+    /**
      * Cancel an accidental emergency / Report false alarm.
      * Retains immutable audit history.
      */
@@ -312,10 +535,15 @@ public class IncidentManagementService {
                 .latitude(i.getLatitude())
                 .longitude(i.getLongitude())
                 .locationNotes(i.getLocationNotes())
+                .triggerSource(i.getTriggerSource())
+                .slaBreached(i.getSlaBreached())
                 .currentEscalationLevel(i.getCurrentEscalationLevel())
                 .escalationDeadline(i.getEscalationDeadline())
                 .acknowledgedAt(i.getAcknowledgedAt())
                 .assignedAt(i.getAssignedAt())
+                .etaMinutes(i.getEtaMinutes())
+                .estimatedArrivalAt(i.getEstimatedArrivalAt())
+                .enRouteAt(i.getEnRouteAt())
                 .onSceneAt(i.getOnSceneAt())
                 .resolvedAt(i.getResolvedAt())
                 .closedAt(i.getClosedAt())

@@ -37,6 +37,15 @@ public class EmergencyAssignment {
     @Column(name = "acknowledged_at")
     private LocalDateTime acknowledgedAt;
 
+    @Column(name = "eta_minutes")
+    private Integer etaMinutes;
+
+    @Column(name = "estimated_arrival_at")
+    private LocalDateTime estimatedArrivalAt;
+
+    @Column(name = "en_route_at")
+    private LocalDateTime enRouteAt;
+
     @Column(name = "on_scene_at")
     private LocalDateTime onSceneAt;
 
