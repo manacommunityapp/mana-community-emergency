@@ -1,6 +1,6 @@
 spring:
   datasource:
-    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;MODE=PostgreSQL
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;MODE=PostgreSQL;INIT=CREATE SCHEMA IF NOT EXISTS manacommunity
     driver-class-name: org.h2.Driver
     username: sa
     password:
@@ -16,9 +16,12 @@ app:
   jwt:
     secret: test-secret-key-for-testing-only-not-for-production-use-at-all
     expiration-ms: 86400000
+  security:
+    jwt:
+      secret: test-secret-key-for-testing-only-not-for-production-use-at-all
+      key-id: test-k1
   cors:
-    allowed-origins:
-      - "http://localhost:5173"
+    allowed-origins: "http://localhost:5173"
 
 emergency:
   default-sla:

@@ -60,19 +60,23 @@ public class EscalationWatchdogService {
             return;
         }
 
+        EmergencyStatus oldStatus = incident.getStatus();
         incident.setCurrentEscalationLevel(next);
         // Extend deadline for next escalation level by 5 minutes
         incident.setEscalationDeadline(LocalDateTime.now().plusMinutes(5));
         incident.setStatus(EmergencyStatus.ESCALATED);
-        incidentRepository.save(incident);
+        incident.setSlaBreached(true);
+        incident = incidentRepository.save(incident);
 
         String logMsg = String.format("SLA breached at %s. Auto-escalated to %s", current, next);
         incidentService.logTimeline(incident.getId(), incident.getCommunityId(),
-                incident.getStatus(), EmergencyStatus.ESCALATED,
+                oldStatus, EmergencyStatus.ESCALATED,
                 null, "SLA_WATCHDOG", "SYSTEM", logMsg);
 
         log.error("Emergency incident {} ESCALATED to {} (Community: {})",
                 incident.getIncidentRef(), next, incident.getCommunityId());
+
+        incidentService.broadcastToCommandCenter(incident.getCommunityId(), incidentService.toResponse(incident));
     }
 
     private EscalationLevel nextLevel(EscalationLevel current) {

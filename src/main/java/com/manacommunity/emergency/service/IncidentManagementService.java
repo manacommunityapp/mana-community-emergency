@@ -554,7 +554,7 @@ public class IncidentManagementService {
                 .build();
     }
 
-    private void broadcastToCommandCenter(Long communityId, IncidentResponse response) {
+    public void broadcastToCommandCenter(Long communityId, IncidentResponse response) {
         try {
             messagingTemplate.convertAndSend("/topic/community/" + communityId + "/emergency", response);
         } catch (Exception e) {
